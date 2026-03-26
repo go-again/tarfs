@@ -8,6 +8,16 @@
 // archive as []byte, pass it to [NewZstd] or [NewGzip], and serve the result
 // with [net/http.FileServer] or any function that accepts [fs.FS].
 //
+// After construction the input []byte is no longer referenced by the FS.
+// Callers may nil it out immediately to drop the Go reference to the compressed
+// data, allowing the OS to page out those binary pages under memory pressure:
+//
+//	tfs, err := tarfs.NewZstd(data)
+//	data = nil // optional: drop reference to compressed bytes
+//
+// For long-running servers, wrap construction in [sync.Once] so decompression
+// happens exactly once regardless of how many callers invoke the constructor.
+//
 // # Constructors
 //
 //   - [New] — plain (uncompressed) tar

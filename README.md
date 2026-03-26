@@ -158,6 +158,49 @@ defer f.Close()
 tfs, err := tarfs.NewFromReader(bzip2.NewReader(f))
 ```
 
+## Production pattern
+
+In a real application the FS is typically built once at startup and reused for
+the lifetime of the process. Use `sync.Once` to guarantee that, and nil out the
+raw archive bytes immediately after construction to drop the Go reference to the
+compressed data:
+
+```go
+import (
+    _ "embed"
+    "io/fs"
+    "sync"
+
+    "github.com/go-again/tarfs"
+)
+
+//go:embed assets.tar.zst
+var assetData []byte
+
+var (
+    assetOnce sync.Once
+    assetFS   fs.FS
+)
+
+func Assets() fs.FS {
+    assetOnce.Do(func() {
+        tfs, err := tarfs.NewZstd(assetData)
+        assetData = nil // drop reference to compressed bytes
+        if err != nil {
+            return // assetFS stays nil; caller handles gracefully
+        }
+        assetFS = tfs
+    })
+    return assetFS
+}
+```
+
+**Why nil `assetData`?** `//go:embed` stores the compressed bytes in the
+binary's read-only data segment — the Go GC cannot free them. However, dropping
+the Go reference lets the OS page out those pages under memory pressure once the
+data has been fully decompressed into the heap by `tarfs`. The decompressed
+in-memory copy in `tfs` is what actually gets served.
+
 ## Serving a single-page application
 
 SPAs need a fallback to `index.html` for client-side routes. A thin wrapper around `http.FileServer` handles this:
