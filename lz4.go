@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/pierrec/lz4/v4"
+	"github.com/go-again/az"
 )
 
 // NewLz4 builds an FS from an lz4-compressed tar archive (.tar.lz4).
@@ -15,5 +15,7 @@ func NewLz4(data []byte) (*FS, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("tarfs: empty archive")
 	}
-	return NewFromReader(lz4.NewReader(bytes.NewReader(data)))
+	r := az.NewReader(bytes.NewReader(data))
+	defer r.Close()
+	return NewFromReader(r)
 }

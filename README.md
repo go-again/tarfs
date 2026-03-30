@@ -2,9 +2,10 @@
 
 A read-only, in-memory [`fs.FS`](https://pkg.go.dev/io/fs#FS) backed by a tar archive.
 
-Embed a compressed archive into your binary with `//go:embed`, pass it to `tarfs.NewZstd` or `tarfs.NewGzip`, and serve the result directly with `http.FileServer` or any function that accepts `fs.FS`.
+Embed a compressed archive into your binary with `//go:embed`, pass it to `tarfs.NewAz`, `tarfs.NewZstd`, or `tarfs.NewGzip`, and serve the result directly with `http.FileServer` or any function that accepts `fs.FS`.
 
-- Supports plain tar, gzip (`.tar.gz`), and zstd (`.tar.zst`) — pick whatever suits your size vs. speed needs.
+- Supports plain tar, gzip (`.tar.gz`), zstd (`.tar.zst`), lz4 (`.tar.lz4`), and az (`.tar.az`) — pick whatever suits your size vs. speed needs.
+- `NewAz` auto-detects lz4 or zstd from the stream header — one constructor, either format.
 - Decompresses once at startup; all subsequent reads are served from memory with no further CPU cost.
 - Implements `fs.FS`, `fs.ReadDirFS`, `fs.ReadFileFS`, and `io.ReadSeeker` on file handles (needed for HTTP range requests).
 - Synthesizes directory entries — works even when the archive omits explicit directory headers.
@@ -17,15 +18,14 @@ go get github.com/go-again/tarfs
 ```
 
 > **Dependencies**: the base package uses only the Go standard library.
-> `NewZstd` pulls in `github.com/klauspost/compress`.
-> `NewLz4` pulls in `github.com/pierrec/lz4/v4`.
+> `NewAz`, `NewZstd`, and `NewLz4` pull in `github.com/go-again/az` (no transitive deps).
 > `NewGzip` and `NewBzip2` use only stdlib.
 
 ## Quick start
 
 ### With zstd
 
-The smallest binary for a large asset bundle. Requires `github.com/klauspost/compress`.
+The smallest binary for a large asset bundle. Requires `github.com/go-again/az`.
 
 **1. Build the archive**
 
@@ -88,7 +88,6 @@ Everything else is identical to the zstd example.
 ### With lz4
 
 Fastest decompression of any supported format — good when startup latency matters.
-Requires `github.com/pierrec/lz4/v4`.
 
 **1. Build the archive**
 
@@ -105,6 +104,37 @@ var assetData []byte
 
 tfs, err := tarfs.NewLz4(assetData)
 ```
+
+### With az (auto-detect lz4 or zstd)
+
+The [`az` CLI](https://pkg.go.dev/github.com/go-again/az/cmd/az) is a single tool that covers both lz4 (levels 1–2) and zstd (levels 3–5). The `NewAz` constructor auto-detects the format from the stream header, so you can switch compression levels without changing any Go code.
+
+**Install the az CLI**
+
+```sh
+go install github.com/go-again/az/cmd/az@latest
+```
+
+**1. Build the archive**
+
+```sh
+# -5: zstd best compression
+tar -cf - dist/ | az -5 > assets.tar.az
+
+# -1: lz4 fastest decompression
+tar -cf - dist/ | az -1 > assets.tar.az
+```
+
+**2. Embed and serve**
+
+```go
+//go:embed assets.tar.az
+var assetData []byte
+
+tfs, err := tarfs.NewAz(assetData)
+```
+
+`NewAz` also accepts existing `.tar.lz4` and `.tar.zst` archives — format detection is based on magic bytes, not file extension.
 
 ### With bzip2
 
@@ -323,12 +353,18 @@ func NewGzip(data []byte) (*FS, error)
 // Uses stdlib compress/bzip2 — no extra dependency.
 func NewBzip2(data []byte) (*FS, error)
 
+// NewAz builds an FS from an az-compressed tar archive (.tar.az).
+// Auto-detects lz4 (levels 1–2) or zstd (levels 3–5) from the stream header.
+// Also accepts existing .tar.lz4 and .tar.zst archives.
+// Requires github.com/go-again/az.
+func NewAz(data []byte) (*FS, error)
+
 // NewZstd builds an FS from a zstd-compressed tar archive (.tar.zst).
-// Requires github.com/klauspost/compress.
+// Requires github.com/go-again/az.
 func NewZstd(data []byte) (*FS, error)
 
 // NewLz4 builds an FS from an lz4-compressed tar archive (.tar.lz4).
-// Requires github.com/pierrec/lz4/v4.
+// Requires github.com/go-again/az.
 func NewLz4(data []byte) (*FS, error)
 
 // Open implements fs.FS.
@@ -348,19 +384,24 @@ File handles returned by `Open` implement:
 
 ## Compression comparison
 
-| Format | Extension      | Extra dep                  | Compression ratio | Decompression speed |
-|--------|---------------|----------------------------|-------------------|---------------------|
-| none   | `.tar`         | none                       | none              | instant             |
-| gzip   | `.tar.gz`      | none (stdlib)              | moderate          | fast                |
-| bzip2  | `.tar.bz2`     | none (stdlib, decode-only) | good              | slow                |
-| lz4    | `.tar.lz4`     | `pierrec/lz4/v4`           | low–moderate      | fastest             |
-| zstd   | `.tar.zst`     | `klauspost/compress`       | best              | very fast           |
+| Format    | Extension   | Extra dep         | CLI levels | Compression ratio | Decompression speed |
+|-----------|-------------|-------------------|------------|-------------------|---------------------|
+| none      | `.tar`      | none              | —          | none              | instant             |
+| gzip      | `.tar.gz`   | none (stdlib)     | —          | moderate          | fast                |
+| bzip2     | `.tar.bz2`  | none (decode-only)| —          | good              | slow                |
+| az / lz4  | `.tar.az`   | `go-again/az`     | `-1`, `-2` | low–moderate      | fastest             |
+| az / zstd | `.tar.az`   | `go-again/az`     | `-3` to `-5` | best            | very fast           |
 
 **Recommendations:**
-- **New archives** — use zstd (`zstd -19`): best ratio, fast to decompress, widely available CLI
-- **Startup-sensitive** — use lz4: decompresses ~2–3× faster than gzip, ~1.5× faster than zstd
-- **Legacy / existing archives** — use the matching format; `NewFromReader` handles any other compressor
+- **New archives** — use zstd (`zstd -19` or `az -5`): best ratio, fast to decompress
+- **Startup-sensitive** — use lz4 (`lz4 -9` or `az -1`): decompresses ~2–3× faster than gzip, ~1.5× faster than zstd
+- **Single CLI for both** — use `az` + `NewAz`: one tool, one constructor, switch levels without changing Go code
+- **Legacy / existing archives** — use the matching constructor; `NewFromReader` handles any other compressor
 - **Zero extra deps** — use gzip; bzip2 only if you already have the archive
+
+## Sponsors
+
+tarfs is sponsored by [ssh2incus](https://ssh2incus.com) — an SSH gateway for [Incus](https://github.com/ssh2incus/ssh2incus) containers and VMs. ssh2incus uses tarfs to embed its web UI frontend into a single self-contained binary.
 
 ## License
 

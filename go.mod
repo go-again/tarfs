@@ -1,8 +1,5 @@
 module github.com/go-again/tarfs
 
-go 1.24
+go 1.25
 
-require (
-	github.com/klauspost/compress v1.18.5
-	github.com/pierrec/lz4/v4 v4.1.26
-)
+require github.com/go-again/az v0.1.0

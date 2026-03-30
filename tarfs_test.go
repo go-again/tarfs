@@ -14,9 +14,7 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/klauspost/compress/zstd"
-	lz4 "github.com/pierrec/lz4/v4"
-
+	"github.com/go-again/az"
 	"github.com/go-again/tarfs"
 )
 
@@ -62,30 +60,19 @@ func buildGzip(t *testing.T, files map[string][]byte) []byte {
 
 func buildZstd(t *testing.T, files map[string][]byte) []byte {
 	t.Helper()
-	var buf bytes.Buffer
-	enc, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(zstd.SpeedFastest))
-	if err != nil {
-		t.Fatalf("zstd writer: %v", err)
-	}
-	tw := tar.NewWriter(enc)
-	for name, data := range files {
-		if data == nil {
-			_ = tw.WriteHeader(&tar.Header{Name: name + "/", Typeflag: tar.TypeDir, Mode: 0o755})
-			continue
-		}
-		_ = tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Size: int64(len(data)), Mode: 0o644})
-		_, _ = tw.Write(data)
-	}
-	_ = tw.Close()
-	_ = enc.Close()
-	return buf.Bytes()
+	return buildAz(t, files, az.Level3)
 }
 
 func buildLz4(t *testing.T, files map[string][]byte) []byte {
 	t.Helper()
+	return buildAz(t, files, az.Level1)
+}
+
+func buildAz(t *testing.T, files map[string][]byte, level az.Level) []byte {
+	t.Helper()
 	var buf bytes.Buffer
-	lw := lz4.NewWriter(&buf)
-	tw := tar.NewWriter(lw)
+	zw := az.NewWriter(&buf, az.WithLevel(level))
+	tw := tar.NewWriter(zw)
 	for name, data := range files {
 		if data == nil {
 			_ = tw.WriteHeader(&tar.Header{Name: name + "/", Typeflag: tar.TypeDir, Mode: 0o755})
@@ -95,7 +82,7 @@ func buildLz4(t *testing.T, files map[string][]byte) []byte {
 		_, _ = tw.Write(data)
 	}
 	_ = tw.Close()
-	_ = lw.Close()
+	_ = zw.Close()
 	return buf.Bytes()
 }
 
@@ -196,6 +183,46 @@ func TestNewZstd_file(t *testing.T) {
 		t.Fatalf("NewZstd: %v", err)
 	}
 	got, err := fs.ReadFile(tfs, "z.txt")
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Errorf("got %q, want %q", got, content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NewAz (auto-detect lz4 / zstd)
+// ---------------------------------------------------------------------------
+
+func TestNewAz_empty(t *testing.T) {
+	if _, err := tarfs.NewAz(nil); err == nil {
+		t.Fatal("expected error for nil data")
+	}
+}
+
+func TestNewAz_lz4(t *testing.T) {
+	content := []byte("hello az/lz4 tar")
+	tfs, err := tarfs.NewAz(buildAz(t, map[string][]byte{"a.txt": content}, az.Level1))
+	if err != nil {
+		t.Fatalf("NewAz(lz4): %v", err)
+	}
+	got, err := fs.ReadFile(tfs, "a.txt")
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Errorf("got %q, want %q", got, content)
+	}
+}
+
+func TestNewAz_zstd(t *testing.T) {
+	content := []byte("hello az/zstd tar")
+	tfs, err := tarfs.NewAz(buildAz(t, map[string][]byte{"a.txt": content}, az.Level5))
+	if err != nil {
+		t.Fatalf("NewAz(zstd): %v", err)
+	}
+	got, err := fs.ReadFile(tfs, "a.txt")
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}

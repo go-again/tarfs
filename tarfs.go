@@ -1,12 +1,13 @@
 // Package tarfs implements a read-only in-memory [fs.FS] backed by a tar archive.
 //
-// The archive can be uncompressed, gzip-compressed, or zstd-compressed. All
-// file data is decompressed once at construction time, so individual file reads
-// are served directly from memory with no further decompression cost.
+// The archive can be uncompressed, gzip-compressed, zstd-compressed,
+// lz4-compressed, or az-compressed. All file data is decompressed once at
+// construction time, so individual file reads are served directly from memory
+// with no further decompression cost.
 //
 // tarfs integrates naturally with Go's [embed] package: embed a compressed
-// archive as []byte, pass it to [NewZstd] or [NewGzip], and serve the result
-// with [net/http.FileServer] or any function that accepts [fs.FS].
+// archive as []byte, pass it to [NewAz], [NewZstd], or [NewGzip], and serve
+// the result with [net/http.FileServer] or any function that accepts [fs.FS].
 //
 // After construction the input []byte is no longer referenced by the FS.
 // Callers may nil it out immediately to drop the Go reference to the compressed
@@ -23,6 +24,8 @@
 //   - [New] — plain (uncompressed) tar
 //   - [NewGzip] — gzip-compressed tar (.tar.gz / .tgz)
 //   - [NewZstd] — zstd-compressed tar (.tar.zst)
+//   - [NewLz4] — lz4-compressed tar (.tar.lz4)
+//   - [NewAz] — az-compressed tar (.tar.az); auto-detects lz4 or zstd
 //   - [NewFromReader] — streaming plain tar from any [io.Reader]
 //
 // # Archive path layout
